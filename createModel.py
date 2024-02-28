@@ -95,31 +95,3 @@ def smoteResampling(X, y):
    X_resampled, y_resampled = smote.fit_resample(X, y)
    return X_resampled, y_resampled
    
-
-
-
-#### code #####
-# df = pd.read_csv("testing.csv", header=0)
-# dfnew = df.drop(["Sample"], axis=1)
-# # print(dfnew.head())
-# dfnew.fillna("99", inplace=True)
-# xtrain, xtest, ytrain, ytest, colLabels = createTrainTest(dfnew, groupby="Group")
-# y_pred_randforest, cmRandForest = randForest(xtrain, xtest, ytrain, ytest)
-# modelEvaluation(cmRandForest, ytest, y_pred_randforest)
-
-# featureCols = getFeaturesRF(xtrain, ytrain, xtest, ytest)
-# # print(len(featureCols))
-# dfFeatures = dfnew.drop([i for i in dfnew.columns if i not in featureCols], axis=1)
-# # print(dfFeatures.shape)
-# xtrain2, xtest2, ytrain2, ytest2 = train_test_split(dfFeatures, colLabels, test_size=0.25, random_state=0)
-# y_pred_randforest2, cmRandForest2 = randForest(xtrain2, xtest2, ytrain2, ytest2)
-# modelEvaluation(cmRandForest2, ytest, y_pred_randforest2)
-# # with open("hVISARandForest.pkl", 'wb') as logmodelFile:
-# #     pickle.dump(classifier2, logmodelFile)
-# #     print(f"RF Model saved in: {logmodelFile}")
-
-# y_pred_LR, cmLR = logitClassifier(xtrain, xtest, ytrain, ytest)
-# modelEvaluation(cmLR, ytest, y_pred_LR)
-
-# y_pred_LRFeature, cmLRFeature = logitClassifier(xtrain2, xtest2, ytrain2, ytest2)
-# modelEvaluation(cmLRFeature, ytest2, y_pred_LRFeature)
