@@ -3,8 +3,28 @@ import numpy as np
 from Bio import SeqIO
 from Bio.Seq import Seq
 from itertools import permutations, product
-### The script accepts a matrix file from KMA and returns a CSV file with all amino acid mutations. This CSV file can be ued for predicting hVISA ####
-### The results should be used for research purposes only and cannot be used to guide treatment for patients ####
+import os
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--readPrefix", help="Fastq file prefix (File should end in *_1.fastq.gz)")
+parser.add_argument("--dbprefix", help="KMA db prefix")
+parser.add_argument("--outPrefix", help="Output file prefix")
+parser.add_argument("--kmaPath", help="kmaPath", default="/home/sreeram/kma")
+parser.add_argument("--genePosFile", help="Gene position file in CSV")
+parser.add_argument("--fastqPath", help="Fastq file path")
+args = parser.parse_args()
+
+
+def runKMA(readPrefix, dbprefix, outPrefix):
+    kmaPath = args.kmaPath
+    cmd = f"{kmaPath}/kma -ipe {args.fastqPath}/{readPrefix}_1.fastq.gz {args.fastqPath}/{readPrefix}_2.fastq.gz -t_db {dbprefix} -matrix -mp 20 -1t1 -o {outPrefix}"
+    print(cmd)
+    os.system(cmd)
+    print("KMA run completed..Unzipping the matrix file")
+    os.system(f"gunzip {outPrefix}.mat.gz")
+
 
 def read_matrix(matrix_file, outfile):
     """Remove gapped alignment values in the matrix file and write a TSV file for Pandas."""
@@ -30,7 +50,10 @@ def read_matrix(matrix_file, outfile):
         for index, line in enumerate(data):
             if line.startswith("#"):
                 indices.append(index)
+        indices.append(len(data))
 
+        print(f"total number of proteins: {len(indices)}")
+        print(f"indices identified are: {indices}")
         for i in range(len(indices) - 1):
             # The matrix file has columns in the order Ref, A, C, G, T, N, -(gaps)
             start = indices[i]
@@ -48,126 +71,141 @@ def read_matrix(matrix_file, outfile):
                     pos += 1
 
 
-def getMutations(dataFile=None, genePos="mutPositions.csv"):
+def getMutations(dataFile, genePos):
     mutsdict = dict()
     df = pd.read_csv(dataFile, header=0, sep="\t")
-    # print(df.head())
+
     dfMutpos = pd.read_csv(genePos, header=0)
-    # print(dfMutpos.head())
+
     geneNames = list(set(list(dfMutpos["GENE"])))
     print(f"Identifying mutations in {geneNames}")
     # getting gene wise data
     for geneName in geneNames:
-        # for geneName in ["GraS"]:
+
         mutsdict[geneName] = []
         matrixdata = df[df["Gene"] == geneName]
-        # print(matrixdata.tail())
+        print(matrixdata.shape)
         posIDS = dfMutpos[dfMutpos["GENE"] == geneName]["POS"]
-        # print(posIDS)
+
         for varPosition in posIDS:
-            codonStart = int(varPosition)*3 - 2
+            codonStart = int(varPosition)*3 - 3
             codonStop = int(varPosition)*3
-            subdf = matrixdata.iloc[codonStart-1:codonStop]
-            # print(subdf)
+            subdf = matrixdata.iloc[codonStart:codonStop]
+            print(subdf)
             codons = []
             bpsList = ["A", "C", "G", "T", "N", "-"]
             subdfData = subdf.loc[:, bpsList]
             subdfData = subdfData.div(subdfData.sum(axis=1), axis=0)
-            # print(subdfData)
-            # codon = [subdf.loc[codonStart-1, "Reference"], subdf.loc[codonStart,
-            #  "Reference"], subdf.loc[codonStart+1, "Reference"]]
             altcodon = []
             for index, row in subdfData.iterrows():
-
-                # print(row)
                 refBP = subdf.loc[index, "Reference"]
                 refBPCov = subdfData.loc[index, refBP]
                 if str(refBPCov) == "nan":
                     refBPCov = "No coverage"
                 print(
                     f"The genome input at {index} has {refBP} with {refBPCov} coverage for gene {geneName}")
-                altBP = subdfData.columns[row.apply(lambda x: x >= 0.1)]
+                altBP = subdfData.columns[row.apply(lambda x: x >= 0.05)]
                 codons.append(altBP)
 
                 for j in altBP:
                     if j != refBP:
-                        # print(f"mutation detected was: {j} at position {index}")
                         altcodon.append(j)
                     else:
                         altcodon.append(refBP)
-            # print(altcodon)
-            # print(f"The detected codons are: {list(codons)}")
+
             # to generate possible codons from detected bases
             allCodons = [p for p in product(*codons)]
             altAAlist = []
             for sampleCodon in allCodons:
                 altcodon = list(sampleCodon)
                 altcodonStr = "".join(altcodon)
-            # refCodon = "".join(codon)
-                altAA = Seq(altcodonStr).translate(table=11)
+
+                if "-" not in altcodonStr:
+                    altAA = Seq(altcodonStr).translate(table=11)
+                else:
+                    altAA = ""
                 altAAlist.append(altAA)
                 print(f"{altcodonStr} -> {altAA}")
 
             dataOutput = geneName + "_" + str(varPosition)
             mutsdict[geneName].append({varPosition: altAAlist})
-    # print(mutsdict)
+    print(mutsdict)
     return mutsdict
 
 
-def mutsdict2df(mutsdict, genePos="mutPositions.csv", fout="predInput.csv", sampleName="XXX"):
+def mutsdict2df(mutsdict, genePos, sampleName):
     """To read a mutsdict variable and convert into a dataframe for prediction"""
+
+    output = []
     mutPosdf = pd.read_csv(genePos, header=0)
     nsample = 0
-    emptydf = pd.DataFrame()
+    geneNames = list(mutPosdf["GENE"])
+    posIDS = list(mutPosdf["POS"])
+    colnames = []
+    for i in range(len(geneNames)):
+        colid = "_".join([geneNames[i], str(int(posIDS[i]))])
+        colnames.append(colid)
+    emptydf = pd.DataFrame(columns=colnames)
     emptydf.loc[nsample, "Sample"] = sampleName
+    print(emptydf.head())
     for gene in list(mutsdict.keys()):
-        genesScreened = np.array(mutPosdf["GENE"] == gene)
+        print(gene)
         geneData = mutsdict[gene]
         for mutposition in geneData:
-            # print(mutposition)
             posids = list(mutposition.keys())
             for posID in posids:
+                colidname = "_".join([gene, str(int(posID))])
                 allAAs = [str(i) for i in mutposition[posID]]
                 allAAs = list(set(allAAs))
-                print(
-                    f"All amino acids detected at {posID} for gene {gene}: {allAAs}")
+                outstr1 = f"All amino acids detected at {posID} for gene {gene}: {allAAs}"
+                refAA = mutPosdf[(mutPosdf["GENE"] == gene) &
+                                 (mutPosdf["POS"] == posID)]["REF"]
+                refAA = "".join(refAA.values)
+                altAA = mutPosdf[(mutPosdf["GENE"] == gene) &
+                                 (mutPosdf["POS"] == posID)]["ALT"]
+
                 for AAdetected in allAAs:
-                    # AAdetected = mutposition[posID]
-                    # print(AAdetected)
-                    refAA = mutPosdf[(mutPosdf["GENE"] == gene) &
-                                     (mutPosdf["POS"] == posID)]["REF"]
-                    refAA = "".join(refAA.values)
-                    altAA = mutPosdf[(mutPosdf["GENE"] == gene) &
-                                     (mutPosdf["POS"] == posID)]["ALT"]
-                # print(altAA)
-                    altAA = "".join(altAA.values)
-
-                    colname = gene + "_" + str(int(posID)) + "_" + altAA
-                # print(
-                    # f"the reference AA is {refAA} for gene {gene} at position {posID}")
                     if str(AAdetected) == refAA:
-                        print(
-                            f"no variant for gene {gene} at position {posID}")
-                        dataval = 0
+                        outstr2 = f"no variant for gene {gene} at position {posID}"
+                        dataval = refAA
                     elif AAdetected == "":
-                        print(
-                            f"No read detected for gene {gene} at position {posID}: {refAA} -> None")
+                        outstr2 = f"No read detected for gene {gene} at position {posID}: {refAA} -> None"
                         dataval = None
-                    elif AAdetected == altAA:
-                        print(
-                            f"varaint detected for gene {gene} at position {posID}: {refAA} -> {AAdetected}")
-                        dataval = 1
-                    else:
-                        print(
-                            f" Novel varaint detected for gene {gene} at position {posID}: {refAA} | {altAA} -> {AAdetected}")
-                        if altAA in allAAs:
-                            dataval = str(1) + "_" + AAdetected
-                        else:
-                            dataval = AAdetected
-                    # print(dataval)
-                    emptydf.loc[nsample, colname] = dataval
+                    elif AAdetected in altAA:
+                        dataval = AAdetected
+                        outstr2 = f"varaint detected for gene {gene} at position {posID}: {refAA} -> {AAdetected}."
 
-    nsample += 1
-    # print(emptydf.head())
+                    else:
+                        outstr2 = f" Novel varaint detected for gene {gene} at position {posID}: {refAA} | {altAA} -> {AAdetected}"
+                        dataval = AAdetected
+                    emptydf.loc[nsample, colidname] = dataval
+                    output.append("\n".join([outstr1, outstr2]))
+    return emptydf, output
+
+
+def writedf(emptydf, output):
+    fout = f"{args.outPrefix}" + "_df.csv"
     emptydf.to_csv(fout, index=False)
+    print(emptydf.head())
     print(f"dataframe created: {fout}")
+    logFile = f"{args.outPrefix}" + ".log"
+    with open(logFile, 'w', encoding='utf-8', newline="\n") as logfile:
+        for out in output:
+            logfile.write(out + "\n")
+
+
+def main():
+    runKMA(readPrefix=args.readPrefix,
+           dbprefix=args.dbprefix, outPrefix=args.outPrefix)
+    read_matrix(matrix_file=f"{args.outPrefix}.mat",
+                outfile=f"{args.outPrefix}_cleaned.tsv")
+    mutsdict = getMutations(
+        dataFile=f"{args.outPrefix}_cleaned.tsv", genePos=args.genePosFile)
+    dataDF, sampleOut = mutsdict2df(
+        mutsdict=mutsdict, genePos=args.genePosFile, sampleName=args.readPrefix)
+
+    writedf(emptydf=dataDF, output=sampleOut)
+
+
+if __name__ == main():
+    main()
